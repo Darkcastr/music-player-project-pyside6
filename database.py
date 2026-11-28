@@ -15,11 +15,20 @@ def get_connection():
 def init_db():
     conn = get_connection()
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS favorites (
+        CREATE TABLE IF NOT EXISTS playlists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
-            path TEXT NOT NULL,
-            PRIMARY KEY (user_id, path),
+            name TEXT NOT NULL,
+            UNIQUE (user_id, name),
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS playlist_tracks (
+            playlist_id INTEGER NOT NULL,
+            path TEXT NOT NULL,
+            PRIMARY KEY (playlist_id, path),
+            FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
         )
     """)
     conn.commit()
@@ -134,3 +143,101 @@ def get_favorites(user_id):
     finally:
         conn.close()
     return {row[0] for row in rows}
+
+def create_playlist(user_id, name):
+    name = name.strip()
+    if not name:
+        return False, "Playlist name cannot be empty"
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO playlists (user_id, name) VALUES (?, ?)",
+            (user_id, name),
+        )
+        conn.commit()
+        return True, cursor.lastrowid
+    except sqlite3.IntegrityError:
+        return False, "You already have a playlist with that name"
+    finally:
+        conn.close()
+
+
+def rename_playlist(user_id, playlist_id, new_name):
+    new_name = new_name.strip()
+    if not new_name:
+        return False, "Playlist name cannot be empty"
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE playlists SET name = ? WHERE id = ? AND user_id = ?",
+            (new_name, playlist_id, user_id),
+        )
+        conn.commit()
+        return True, "Renamed"
+    except sqlite3.IntegrityError:
+        return False, "You already have a playlist with that name"
+    finally:
+        conn.close()
+
+
+def delete_playlist(user_id, playlist_id):
+    conn = get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM playlists WHERE id = ? AND user_id = ?",
+            (playlist_id, user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_playlists(user_id):
+    conn = get_connection()
+    try:
+        return conn.execute(
+            "SELECT id, name FROM playlists WHERE user_id = ? "
+            "ORDER BY name COLLATE NOCASE",
+            (user_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def add_track_to_playlist(user_id, playlist_id, path):
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO playlist_tracks (playlist_id, path) "
+            "SELECT id, ? FROM playlists WHERE id = ? AND user_id = ?",
+            (path, playlist_id, user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def remove_track_from_playlist(user_id, playlist_id, path):
+    conn = get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM playlist_tracks WHERE playlist_id = ? AND path = ? "
+            "AND playlist_id IN (SELECT id FROM playlists WHERE user_id = ?)",
+            (playlist_id, path, user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_playlist_paths(user_id, playlist_id):
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT path FROM playlist_tracks WHERE playlist_id = ? "
+            "AND playlist_id IN (SELECT id FROM playlists WHERE user_id = ?)",
+            (playlist_id, user_id),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [row[0] for row in rows]

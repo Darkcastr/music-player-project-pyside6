@@ -3,14 +3,18 @@ import os
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFileDialog, QSlider, QListWidget, QStyle
+    QFileDialog, QSlider, QListWidget, QListWidgetItem, QStyle,
+    QInputDialog, QMessageBox
 )
-
 
 from core.player import AudioPlayer
 from core.library import read_track, scan_folder
 from core.queue_manager import PlayQueue, REPEAT_OFF, REPEAT_ALL, REPEAT_ONE
-from database import get_user_id, get_favorites, add_favorite, remove_favorite
+from database import (
+    get_user_id, get_favorites, add_favorite, remove_favorite,
+    create_playlist, rename_playlist, delete_playlist, get_playlists,
+    add_track_to_playlist, remove_track_from_playlist, get_playlist_paths,
+)
 
 def format_time(ms):
     total_seconds = ms // 1000
@@ -40,6 +44,8 @@ class PlayerWindow(QWidget):
         self.position = 0
         self.user_id = get_user_id(username)
         self.favorites = get_favorites(self.user_id)
+        self.current_playlist_id = None
+        self.playlist_paths = set()
         self.setWindowTitle("Music Player")
         self.resize(800, 500)
 
@@ -52,6 +58,28 @@ class PlayerWindow(QWidget):
         top_bar.addWidget(logout_button)
 
         self.track_list = QListWidget()
+        self.playlist_list = QListWidget()
+        new_playlist_button = QPushButton("New")
+        rename_playlist_button = QPushButton("Rename")
+        delete_playlist_button = QPushButton("Delete")
+
+        playlist_buttons = QHBoxLayout()
+        playlist_buttons.addWidget(new_playlist_button)
+        playlist_buttons.addWidget(rename_playlist_button)
+        playlist_buttons.addWidget(delete_playlist_button)
+
+        sidebar = QVBoxLayout()
+        sidebar.addWidget(QLabel("Playlists"))
+        sidebar.addWidget(self.playlist_list, stretch=1)
+        sidebar.addLayout(playlist_buttons)
+
+        sidebar_widget = QWidget()
+        sidebar_widget.setLayout(sidebar)
+        sidebar_widget.setFixedWidth(200)
+
+        body = QHBoxLayout()
+        body.addWidget(sidebar_widget)
+        body.addWidget(self.track_list, stretch=1)
 
         self.now_playing_label = QLabel("No track loaded")
         self.now_playing_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -82,6 +110,9 @@ class PlayerWindow(QWidget):
         self.favorites_only_button = QPushButton("Favorites only")
         self.favorites_only_button.setCheckable(True)
 
+        add_to_playlist_button = QPushButton("Add to playlist")
+        remove_from_playlist_button = QPushButton("Remove from playlist")
+
         controls = QHBoxLayout()
         controls.addWidget(add_files_button)
         controls.addWidget(add_folder_button)
@@ -104,13 +135,15 @@ class PlayerWindow(QWidget):
         volume_row.addWidget(self.repeat_button)
         volume_row.addWidget(self.favorite_button)
         volume_row.addWidget(self.favorites_only_button)
+        volume_row.addWidget(add_to_playlist_button)
+        volume_row.addWidget(remove_from_playlist_button)
         volume_row.addStretch()
         volume_row.addWidget(self.mute_button)
         volume_row.addWidget(self.volume_slider)
 
         layout = QVBoxLayout()
         layout.addLayout(top_bar)
-        layout.addWidget(self.track_list, stretch=1)
+        layout.addLayout(body, stretch=1)
         layout.addWidget(self.now_playing_label)
         layout.addLayout(seek_row)
         layout.addLayout(controls)
@@ -138,6 +171,15 @@ class PlayerWindow(QWidget):
         self.audio.track_finished.connect(self.on_track_finished)
         self.favorite_button.clicked.connect(self.toggle_favorite)
         self.favorites_only_button.toggled.connect(self.apply_filter)
+
+        new_playlist_button.clicked.connect(self.new_playlist)
+        rename_playlist_button.clicked.connect(self.rename_selected_playlist)
+        delete_playlist_button.clicked.connect(self.delete_selected_playlist)
+        add_to_playlist_button.clicked.connect(self.add_selected_to_playlist)
+        remove_from_playlist_button.clicked.connect(self.remove_selected_from_playlist)
+        self.playlist_list.currentItemChanged.connect(self.on_playlist_selected)
+
+        self.load_playlists()
 
     def add_files(self):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -188,8 +230,111 @@ class PlayerWindow(QWidget):
     def apply_filter(self, _checked=None):
         only_favorites = self.favorites_only_button.isChecked()
         for row, track in enumerate(self.tracks):
-            hidden = only_favorites and track["path"] not in self.favorites
+            path = track["path"]
+            hidden = only_favorites and path not in self.favorites
+            if self.current_playlist_id is not None and path not in self.playlist_paths:
+                hidden = True
             self.track_list.item(row).setHidden(hidden)
+
+    def load_playlists(self, select_id=None):
+        self.playlist_list.blockSignals(True)
+        self.playlist_list.clear()
+
+        all_item = QListWidgetItem("All songs")
+        all_item.setData(Qt.ItemDataRole.UserRole, None)
+        self.playlist_list.addItem(all_item)
+
+        selected_row = 0
+        for playlist_id, name in get_playlists(self.user_id):
+            item = QListWidgetItem(name)
+            item.setData(Qt.ItemDataRole.UserRole, playlist_id)
+            self.playlist_list.addItem(item)
+            if playlist_id == select_id:
+                selected_row = self.playlist_list.count() - 1
+
+        self.playlist_list.setCurrentRow(selected_row)
+        self.playlist_list.blockSignals(False)
+        self.on_playlist_selected()
+
+    def on_playlist_selected(self, *_):
+        item = self.playlist_list.currentItem()
+        playlist_id = item.data(Qt.ItemDataRole.UserRole) if item else None
+        self.current_playlist_id = playlist_id
+
+        if playlist_id is None:
+            self.playlist_paths = set()
+        else:
+            paths = get_playlist_paths(self.user_id, playlist_id)
+            self.playlist_paths = set(paths)
+            self.add_tracks([p for p in paths if os.path.exists(p)])
+        self.apply_filter()
+
+    def new_playlist(self):
+        name, ok = QInputDialog.getText(self, "New playlist", "Name:")
+        if not ok:
+            return
+        success, result = create_playlist(self.user_id, name)
+        if success:
+            self.load_playlists(select_id=result)
+        else:
+            QMessageBox.warning(self, "New playlist", result)
+
+    def rename_selected_playlist(self):
+        if self.current_playlist_id is None:
+            return
+        old_name = self.playlist_list.currentItem().text()
+        name, ok = QInputDialog.getText(
+            self, "Rename playlist", "New name:", text=old_name
+        )
+        if not ok:
+            return
+        success, message = rename_playlist(self.user_id, self.current_playlist_id, name)
+        if success:
+            self.load_playlists(select_id=self.current_playlist_id)
+        else:
+            QMessageBox.warning(self, "Rename playlist", message)
+
+    def delete_selected_playlist(self):
+        if self.current_playlist_id is None:
+            return
+        name = self.playlist_list.currentItem().text()
+        answer = QMessageBox.question(
+            self, "Delete playlist",
+            f"Delete \"{name}\"? Your songs will not be deleted.",
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            delete_playlist(self.user_id, self.current_playlist_id)
+            self.load_playlists()
+
+    def add_selected_to_playlist(self):
+        row = self.track_list.currentRow()
+        if row < 0:
+            return
+        playlists = get_playlists(self.user_id)
+        if not playlists:
+            QMessageBox.information(self, "Add to playlist", "Create a playlist first.")
+            return
+        names = [name for _, name in playlists]
+        choice, ok = QInputDialog.getItem(
+            self, "Add to playlist", "Playlist:", names, 0, False
+        )
+        if not ok:
+            return
+        playlist_id = playlists[names.index(choice)][0]
+        path = self.tracks[row]["path"]
+        add_track_to_playlist(self.user_id, playlist_id, path)
+        if playlist_id == self.current_playlist_id:
+            self.playlist_paths.add(path)
+            self.apply_filter()
+
+    def remove_selected_from_playlist(self):
+        row = self.track_list.currentRow()
+        if row < 0 or self.current_playlist_id is None:
+            return
+        path = self.tracks[row]["path"]
+        remove_track_from_playlist(self.user_id, self.current_playlist_id, path)
+        self.playlist_paths.discard(path)
+        self.apply_filter()
 
     def on_item_double_clicked(self, item):
         self.play_track(self.track_list.row(item))
