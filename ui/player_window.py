@@ -3,7 +3,7 @@ import os
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFileDialog, QSlider, QListWidget
+    QFileDialog, QSlider, QListWidget, QStyle
 )
 
 from core.player import AudioPlayer
@@ -15,6 +15,16 @@ def format_time(ms):
     minutes, seconds = divmod(total_seconds, 60)
     return f"{minutes}:{seconds:02d}"
 
+class ClickableSlider(QSlider):
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            value = QStyle.sliderValueFromPosition(
+                self.minimum(), self.maximum(),
+                int(event.position().x()), self.width(),
+            )
+            self.setValue(value)
+            self.sliderMoved.emit(value)
+        super().mousePressEvent(event)
 
 class PlayerWindow(QWidget):
     logout_requested = Signal()
@@ -42,7 +52,7 @@ class PlayerWindow(QWidget):
 
         self.elapsed_label = QLabel("0:00")
         self.total_label = QLabel("0:00")
-        self.seek_slider = QSlider(Qt.Orientation.Horizontal)
+        self.seek_slider = ClickableSlider(Qt.Orientation.Horizontal)
         self.seek_slider.setRange(0, 0)
 
         seek_row = QHBoxLayout()
@@ -66,7 +76,7 @@ class PlayerWindow(QWidget):
 
         self.mute_button = QPushButton("Mute")
         self.mute_button.setCheckable(True)
-        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider = ClickableSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(50)
         self.volume_slider.setFixedWidth(150)
