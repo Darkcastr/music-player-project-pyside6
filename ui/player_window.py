@@ -3,10 +3,11 @@ import os
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFileDialog, QSlider
+    QFileDialog, QSlider, QListWidget
 )
 
 from core.player import AudioPlayer
+from core.library import read_track, scan_folder
 
 
 def format_time(ms):
@@ -22,6 +23,7 @@ class PlayerWindow(QWidget):
         super().__init__()
         self.username = username
         self.audio = AudioPlayer()
+        self.tracks = []
         self.setWindowTitle("Music Player")
         self.resize(800, 500)
 
@@ -32,6 +34,8 @@ class PlayerWindow(QWidget):
         top_bar.addWidget(welcome_label)
         top_bar.addStretch()
         top_bar.addWidget(logout_button)
+
+        self.track_list = QListWidget()
 
         self.now_playing_label = QLabel("No track loaded")
         self.now_playing_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -46,18 +50,19 @@ class PlayerWindow(QWidget):
         seek_row.addWidget(self.seek_slider, stretch=1)
         seek_row.addWidget(self.total_label)
 
-        open_button = QPushButton("Open file")
+        add_files_button = QPushButton("Add files")
+        add_folder_button = QPushButton("Add folder")
         play_button = QPushButton("Play")
         pause_button = QPushButton("Pause")
         stop_button = QPushButton("Stop")
 
         controls = QHBoxLayout()
+        controls.addWidget(add_files_button)
+        controls.addWidget(add_folder_button)
         controls.addStretch()
-        controls.addWidget(open_button)
         controls.addWidget(play_button)
         controls.addWidget(pause_button)
         controls.addWidget(stop_button)
-        controls.addStretch()
 
         self.mute_button = QPushButton("Mute")
         self.mute_button.setCheckable(True)
@@ -70,29 +75,64 @@ class PlayerWindow(QWidget):
         volume_row.addStretch()
         volume_row.addWidget(self.mute_button)
         volume_row.addWidget(self.volume_slider)
-        volume_row.addStretch()
 
         layout = QVBoxLayout()
         layout.addLayout(top_bar)
-        layout.addStretch()
+        layout.addWidget(self.track_list, stretch=1)
         layout.addWidget(self.now_playing_label)
         layout.addLayout(seek_row)
         layout.addLayout(controls)
         layout.addLayout(volume_row)
-        layout.addStretch()
         self.setLayout(layout)
 
         logout_button.clicked.connect(self.logout_requested.emit)
-        open_button.clicked.connect(self.open_file)
+        add_files_button.clicked.connect(self.add_files)
+        add_folder_button.clicked.connect(self.add_folder)
         play_button.clicked.connect(self.audio.play)
         pause_button.clicked.connect(self.audio.pause)
         stop_button.clicked.connect(self.audio.stop)
 
+        self.track_list.itemDoubleClicked.connect(self.on_item_double_clicked)
         self.audio.position_changed.connect(self.on_position_changed)
         self.audio.duration_changed.connect(self.on_duration_changed)
         self.seek_slider.sliderMoved.connect(self.audio.seek)
         self.volume_slider.valueChanged.connect(self.audio.set_volume)
         self.mute_button.toggled.connect(self.audio.set_muted)
+
+    def add_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Add audio files",
+            "",
+            "Audio Files (*.mp3 *.wav *.ogg *.flac);;All Files (*)",
+        )
+        self.add_tracks(paths)
+
+    def add_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Add folder")
+        if folder:
+            self.add_tracks(scan_folder(folder))
+
+    def add_tracks(self, paths):
+        known = {track["path"] for track in self.tracks}
+        for path in paths:
+            if path in known:
+                continue
+            track = read_track(path)
+            self.tracks.append(track)
+            duration_text = format_time(track["duration"] * 1000)
+            self.track_list.addItem(
+                f"{track['title']} - {track['artist']}   [{duration_text}]"
+            )
+
+    def on_item_double_clicked(self, item):
+        self.play_track(self.track_list.row(item))
+
+    def play_track(self, index):
+        track = self.tracks[index]
+        self.audio.load(track["path"])
+        self.now_playing_label.setText(f"{track['title']} - {track['artist']}")
+        self.audio.play()
 
     def on_position_changed(self, position):
         if not self.seek_slider.isSliderDown():
@@ -102,19 +142,6 @@ class PlayerWindow(QWidget):
     def on_duration_changed(self, duration):
         self.seek_slider.setRange(0, duration)
         self.total_label.setText(format_time(duration))
-
-    def open_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Open audio file",
-            "",
-            "Audio Files (*.mp3 *.wav *.ogg *.flac);;All Files (*)",
-        )
-        if not file_path:
-            return
-        self.audio.load(file_path)
-        self.now_playing_label.setText(os.path.basename(file_path))
-        self.audio.play()
 
     def closeEvent(self, event):
         self.audio.stop()
