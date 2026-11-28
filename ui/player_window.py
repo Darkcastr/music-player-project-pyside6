@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 from core.player import AudioPlayer
 from core.library import read_track, scan_folder
 from core.queue_manager import PlayQueue, REPEAT_OFF, REPEAT_ALL, REPEAT_ONE
+from database import get_user_id, get_favorites, add_favorite, remove_favorite
 
 def format_time(ms):
     total_seconds = ms // 1000
@@ -37,6 +38,8 @@ class PlayerWindow(QWidget):
         self.tracks = []
         self.queue = PlayQueue()
         self.position = 0
+        self.user_id = get_user_id(username)
+        self.favorites = get_favorites(self.user_id)
         self.setWindowTitle("Music Player")
         self.resize(800, 500)
 
@@ -75,6 +78,10 @@ class PlayerWindow(QWidget):
         self.shuffle_button.setCheckable(True)
         self.repeat_button = QPushButton("Repeat: Off")
 
+        self.favorite_button = QPushButton("★ Favorite")
+        self.favorites_only_button = QPushButton("Favorites only")
+        self.favorites_only_button.setCheckable(True)
+
         controls = QHBoxLayout()
         controls.addWidget(add_files_button)
         controls.addWidget(add_folder_button)
@@ -95,6 +102,8 @@ class PlayerWindow(QWidget):
         volume_row = QHBoxLayout()
         volume_row.addWidget(self.shuffle_button)
         volume_row.addWidget(self.repeat_button)
+        volume_row.addWidget(self.favorite_button)
+        volume_row.addWidget(self.favorites_only_button)
         volume_row.addStretch()
         volume_row.addWidget(self.mute_button)
         volume_row.addWidget(self.volume_slider)
@@ -127,6 +136,8 @@ class PlayerWindow(QWidget):
         self.shuffle_button.toggled.connect(self.on_shuffle_toggled)
         self.repeat_button.clicked.connect(self.cycle_repeat)
         self.audio.track_finished.connect(self.on_track_finished)
+        self.favorite_button.clicked.connect(self.toggle_favorite)
+        self.favorites_only_button.toggled.connect(self.apply_filter)
 
     def add_files(self):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -149,10 +160,36 @@ class PlayerWindow(QWidget):
                 continue
             track = read_track(path)
             self.tracks.append(track)
-            duration_text = format_time(track["duration"] * 1000)
-            self.track_list.addItem(
-                f"{track['title']} - {track['artist']}   [{duration_text}]"
-            )
+            self.track_list.addItem(self.track_text(track))
+        self.apply_filter()
+
+    def track_text(self, track):
+        star = "★ " if track["path"] in self.favorites else ""
+        duration_text = format_time(track["duration"] * 1000)
+        return f"{star}{track['title']} - {track['artist']}   [{duration_text}]"
+
+    def refresh_item(self, row):
+        self.track_list.item(row).setText(self.track_text(self.tracks[row]))
+
+    def toggle_favorite(self):
+        row = self.track_list.currentRow()
+        if row < 0:
+            return
+        path = self.tracks[row]["path"]
+        if path in self.favorites:
+            remove_favorite(self.user_id, path)
+            self.favorites.discard(path)
+        else:
+            add_favorite(self.user_id, path)
+            self.favorites.add(path)
+        self.refresh_item(row)
+        self.apply_filter()
+
+    def apply_filter(self, _checked=None):
+        only_favorites = self.favorites_only_button.isChecked()
+        for row, track in enumerate(self.tracks):
+            hidden = only_favorites and track["path"] not in self.favorites
+            self.track_list.item(row).setHidden(hidden)
 
     def on_item_double_clicked(self, item):
         self.play_track(self.track_list.row(item))

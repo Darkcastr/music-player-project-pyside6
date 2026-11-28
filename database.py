@@ -8,16 +8,18 @@ ITERATIONS = 600_000
 
 
 def get_connection():
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
     
 def init_db():
     conn = get_connection()
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL,
-            salt TEXT NOT NULL
+        CREATE TABLE IF NOT EXISTS favorites (
+            user_id INTEGER NOT NULL,
+            path TEXT NOT NULL,
+            PRIMARY KEY (user_id, path),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     """)
     conn.commit()
@@ -88,3 +90,47 @@ if __name__ == "__main__":
     print(verify_user("testuser", "wrongpass"))     # expect False
     print(verify_user("nobody", "secret123"))       # expect False
 
+def get_user_id(username):
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id FROM users WHERE username = ?", (username,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return row[0] if row else None
+
+
+def add_favorite(user_id, path):
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO favorites (user_id, path) VALUES (?, ?)",
+            (user_id, path),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def remove_favorite(user_id, path):
+    conn = get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM favorites WHERE user_id = ? AND path = ?",
+            (user_id, path),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_favorites(user_id):
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT path FROM favorites WHERE user_id = ?", (user_id,)
+        ).fetchall()
+    finally:
+        conn.close()
+    return {row[0] for row in rows}
