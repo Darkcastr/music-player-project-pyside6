@@ -5,6 +5,7 @@ from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 class AudioPlayer(QObject):
     position_changed = Signal(int)
     duration_changed = Signal(int)
+    track_finished = Signal()
 
     def __init__(self):
         super().__init__()
@@ -15,6 +16,11 @@ class AudioPlayer(QObject):
 
         self.player.positionChanged.connect(self.position_changed.emit)
         self.player.durationChanged.connect(self.duration_changed.emit)
+        self.player.mediaStatusChanged.connect(self._on_status_changed)
+
+    def _on_status_changed(self, status):
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            self.track_finished.emit()
 
     def load(self, file_path):
         self.player.setSource(QUrl.fromLocalFile(file_path))

@@ -6,9 +6,10 @@ from PySide6.QtWidgets import (
     QFileDialog, QSlider, QListWidget, QStyle
 )
 
+
 from core.player import AudioPlayer
 from core.library import read_track, scan_folder
-
+from core.queue_manager import PlayQueue, REPEAT_OFF, REPEAT_ALL, REPEAT_ONE
 
 def format_time(ms):
     total_seconds = ms // 1000
@@ -34,6 +35,8 @@ class PlayerWindow(QWidget):
         self.username = username
         self.audio = AudioPlayer()
         self.tracks = []
+        self.queue = PlayQueue()
+        self.position = 0
         self.setWindowTitle("Music Player")
         self.resize(800, 500)
 
@@ -66,13 +69,21 @@ class PlayerWindow(QWidget):
         pause_button = QPushButton("Pause")
         stop_button = QPushButton("Stop")
 
+        prev_button = QPushButton("Previous")
+        next_button = QPushButton("Next")
+        self.shuffle_button = QPushButton("Shuffle")
+        self.shuffle_button.setCheckable(True)
+        self.repeat_button = QPushButton("Repeat: Off")
+
         controls = QHBoxLayout()
         controls.addWidget(add_files_button)
         controls.addWidget(add_folder_button)
         controls.addStretch()
+        controls.addWidget(prev_button)
         controls.addWidget(play_button)
         controls.addWidget(pause_button)
         controls.addWidget(stop_button)
+        controls.addWidget(next_button)
 
         self.mute_button = QPushButton("Mute")
         self.mute_button.setCheckable(True)
@@ -82,6 +93,8 @@ class PlayerWindow(QWidget):
         self.volume_slider.setFixedWidth(150)
 
         volume_row = QHBoxLayout()
+        volume_row.addWidget(self.shuffle_button)
+        volume_row.addWidget(self.repeat_button)
         volume_row.addStretch()
         volume_row.addWidget(self.mute_button)
         volume_row.addWidget(self.volume_slider)
@@ -108,6 +121,12 @@ class PlayerWindow(QWidget):
         self.seek_slider.sliderMoved.connect(self.audio.seek)
         self.volume_slider.valueChanged.connect(self.audio.set_volume)
         self.mute_button.toggled.connect(self.audio.set_muted)
+
+        prev_button.clicked.connect(self.play_previous)
+        next_button.clicked.connect(self.play_next)
+        self.shuffle_button.toggled.connect(self.on_shuffle_toggled)
+        self.repeat_button.clicked.connect(self.cycle_repeat)
+        self.audio.track_finished.connect(self.on_track_finished)
 
     def add_files(self):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -140,11 +159,52 @@ class PlayerWindow(QWidget):
 
     def play_track(self, index):
         track = self.tracks[index]
-        self.audio.load(track["path"])
+        self.queue.current = index
+        self.track_list.setCurrentRow(index)
         self.now_playing_label.setText(f"{track['title']} - {track['artist']}")
+        self.audio.load(track["path"])
         self.audio.play()
 
+    def play_next(self):
+        index = self.queue.next_index(len(self.tracks))
+        if index is not None:
+            self.play_track(index)
+
+    def play_previous(self):
+        if self.position > 3000 and self.queue.current != -1:
+            self.audio.seek(0)
+            return
+        index = self.queue.previous_index(len(self.tracks))
+        if index is not None:
+            self.play_track(index)
+
+    def on_track_finished(self):
+        index = self.queue.next_index(len(self.tracks), auto=True)
+        if index is None:
+            self.audio.stop()
+        elif index == self.queue.current:
+            self.audio.seek(0)
+            self.audio.play()
+        else:
+            self.play_track(index)
+
+    def on_shuffle_toggled(self, checked):
+        self.queue.shuffle = checked
+        self.queue.history.clear()
+
+    def cycle_repeat(self):
+        order = [REPEAT_OFF, REPEAT_ALL, REPEAT_ONE]
+        labels = {
+            REPEAT_OFF: "Repeat: Off",
+            REPEAT_ALL: "Repeat: All",
+            REPEAT_ONE: "Repeat: One",
+        }
+        next_mode = order[(order.index(self.queue.repeat) + 1) % len(order)]
+        self.queue.repeat = next_mode
+        self.repeat_button.setText(labels[next_mode])
+
     def on_position_changed(self, position):
+        self.position = position
         if not self.seek_slider.isSliderDown():
             self.seek_slider.setValue(position)
         self.elapsed_label.setText(format_time(position))
